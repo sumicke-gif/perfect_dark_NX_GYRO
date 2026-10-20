@@ -1,0 +1,485 @@
+--- a/port/src/input.c
++++ b/port/src/input.c
+@@ -91,6 +91,44 @@
+ static f32 mouseSensX = 2.5f;
+ static f32 mouseSensY = 2.5f;
+ 
++// gyro aiming (player 1 only); feeds the same path as mouselook
++#if SDL_VERSION_ATLEAST(2, 0, 14)
++#define INPUT_HAVE_GYRO 1 // SDL sensor API was added in 2.0.14
++#endif
++
++enum gyromode {
++	GYRO_MODE_OFF = 0,
++	GYRO_MODE_ALWAYS = 1,
++	GYRO_MODE_AIM = 2 // only while the aim button is held
++};
++
++// SDL gyro axes (rad/s): x = pitch, y = yaw, z = roll
++#define GYRO_AXIS_PITCH 0
++#define GYRO_AXIS_YAW 1
++#define GYRO_AXIS_ROLL 2 // deliberately unused: turning is driven by yaw only
++
++#define GYRO_RAD_TO_DEG 57.2957795f
++#define GYRO_UNITS_PER_DEG 0.15f // converts degrees turned per frame into mouselook units; tune to taste
++#define GYRO_BIAS_THRESHOLD 3.f // deg/s; below this on all axes the pad is considered stationary
++#define GYRO_BIAS_RATE 0.02f // how fast the drift estimate follows the stationary readings
++#define GYRO_MAX_DT 0.1f // seconds; ignore longer hitches
++
++#ifdef PLATFORM_NSWITCH
++static s32 gyroMode = GYRO_MODE_AIM;
++#else
++static s32 gyroMode = GYRO_MODE_OFF;
++#endif
++static f32 gyroSensX = 1.f; // negative values invert
++static f32 gyroSensY = 1.f;
++static f32 gyroDeadzone = 0.3f; // deg/s
++static f32 gyroDX = 0.f; // this frame's gyro delta in mouselook units
++static f32 gyroDY = 0.f;
++#ifdef INPUT_HAVE_GYRO
++static f32 gyroBias[3];
++static u64 gyroLastTime = 0;
++static s32 gyroEnabledOnPad = 0;
++#endif
++
+ static s32 lastKey = 0;
+ static char lastChar = 0;
+ static s32 textInput = 0;
+@@ -336,6 +374,18 @@
+ 	// remember the joystick index
+ 	padsCfg[cidx].deviceIndex = jidx;
+ 
++#ifdef INPUT_HAVE_GYRO
++	if (cidx == 0) {
++		gyroEnabledOnPad = 0;
++		gyroBias[0] = gyroBias[1] = gyroBias[2] = 0.f;
++		if (SDL_GameControllerHasSensor(pads[cidx], SDL_SENSOR_GYRO) &&
++				SDL_GameControllerSetSensorEnabled(pads[cidx], SDL_SENSOR_GYRO, SDL_TRUE) == 0) {
++			gyroEnabledOnPad = 1;
++		}
++		sysLogPrintf(LOG_NOTE, "input: gyro %s on player 1's controller", gyroEnabledOnPad ? "available" : "not available");
++	}
++#endif
++
+ 	connectedMask |= (1 << cidx);
+ 
+ 	sysLogPrintf(LOG_NOTE, "input: assigned controller '%d: (%s)' (id %d) to player %d",
+@@ -362,6 +412,12 @@
+ 
+ 	pads[cidx] = NULL;
+ 	padsCfg[cidx].rumbleOn = 0;
++#ifdef INPUT_HAVE_GYRO
++	if (cidx == 0) {
++		gyroEnabledOnPad = 0;
++		gyroDX = gyroDY = 0.f;
++	}
++#endif
+ 
+ 	if (cidx) {
+ 		connectedMask &= ~(1 << cidx);
+@@ -918,6 +974,56 @@
+ 	}
+ }
+ 
++static inline void inputUpdateGyro(void)
++{
++	gyroDX = 0.f;
++	gyroDY = 0.f;
++
++#ifdef INPUT_HAVE_GYRO
++	const u64 now = sysGetMicroseconds();
++	f32 dt = gyroLastTime ? (f32)(now - gyroLastTime) / 1000000.f : 0.f;
++	gyroLastTime = now;
++
++	if (gyroMode == GYRO_MODE_OFF || !gyroEnabledOnPad || !pads[0] || dt <= 0.f || dt > GYRO_MAX_DT) {
++		return;
++	}
++
++	f32 g[3];
++	if (SDL_GameControllerGetSensorData(pads[0], SDL_SENSOR_GYRO, g, 3) != 0) {
++		return;
++	}
++
++	// SDL reports rad/s: x = pitch, y = yaw, z = roll
++	f32 rate[3];
++	for (s32 i = 0; i < 3; ++i) {
++		rate[i] = g[i] * GYRO_RAD_TO_DEG;
++	}
++
++	// track drift: while the pad is sitting still, slowly follow whatever it reports
++	if (fabsf(rate[0] - gyroBias[0]) < GYRO_BIAS_THRESHOLD &&
++			fabsf(rate[1] - gyroBias[1]) < GYRO_BIAS_THRESHOLD &&
++			fabsf(rate[2] - gyroBias[2]) < GYRO_BIAS_THRESHOLD) {
++		for (s32 i = 0; i < 3; ++i) {
++			gyroBias[i] += (rate[i] - gyroBias[i]) * GYRO_BIAS_RATE;
++		}
++	}
++
++	if (gyroMode == GYRO_MODE_AIM && !inputButtonPressed(0, CONT_R)) {
++		return;
++	}
++
++	f32 yaw = rate[GYRO_AXIS_YAW] - gyroBias[GYRO_AXIS_YAW];
++	f32 pitch = rate[GYRO_AXIS_PITCH] - gyroBias[GYRO_AXIS_PITCH];
++	if (fabsf(yaw) < gyroDeadzone) yaw = 0.f;
++	if (fabsf(pitch) < gyroDeadzone) pitch = 0.f;
++
++	// positive mouse dx turns right and positive dy looks down; positive gyro yaw is a turn to the left
++	// and positive gyro pitch is looking up, so both get negated. flip with negative GyroSpeedX/Y if it feels wrong.
++	gyroDX = -yaw * dt * GYRO_UNITS_PER_DEG * gyroSensX;
++	gyroDY = -pitch * dt * GYRO_UNITS_PER_DEG * gyroSensY;
++#endif
++}
++
+ void inputUpdate(void)
+ {
+ 	SDL_GameControllerUpdate();
+@@ -925,6 +1031,8 @@
+ 	if (mouseEnabled) {
+ 		inputUpdateMouse();
+ 	}
++
++	inputUpdateGyro();
+ }
+ 
+ s32 inputControllerConnected(s32 idx)
+@@ -1260,6 +1368,9 @@
+ 		mdx = mouseDX * (0.022f / 3.5f) * mouseSensX;
+ 		mdy = mouseDY * (0.022f / 3.5f) * mouseSensY;
+ 	}
++	// gyro is only polled for player 1, same as the mouse
++	mdx += gyroDX;
++	mdy += gyroDY;
+ 	if (dx) *dx = mdx;
+ 	if (dy) *dy = mdy;
+ }
+@@ -1287,6 +1398,47 @@
+ 	mouseSensY = y;
+ }
+ 
++s32 inputGyroSupported(void)
++{
++#ifdef INPUT_HAVE_GYRO
++	return gyroEnabledOnPad;
++#else
++	return 0;
++#endif
++}
++
++s32 inputGyroGetMode(void)
++{
++	return gyroMode;
++}
++
++void inputGyroSetMode(s32 mode)
++{
++	gyroMode = (mode < GYRO_MODE_OFF) ? GYRO_MODE_OFF : (mode > GYRO_MODE_AIM) ? GYRO_MODE_AIM : mode;
++}
++
++void inputGyroGetSpeed(f32 *x, f32 *y)
++{
++	*x = gyroSensX;
++	*y = gyroSensY;
++}
++
++void inputGyroSetSpeed(f32 x, f32 y)
++{
++	gyroSensX = x;
++	gyroSensY = y;
++}
++
++f32 inputGyroGetDeadzone(void)
++{
++	return gyroDeadzone;
++}
++
++void inputGyroSetDeadzone(f32 deadzone)
++{
++	gyroDeadzone = deadzone;
++}
++
+ s32 inputMouseIsEnabled(void)
+ {
+ 	return mouseEnabled;
+@@ -1519,6 +1671,10 @@
+ 	configRegisterInt("Input.MouseLockMode", &mouseLockMode, MLOCK_OFF, MLOCK_AUTO);
+ 	configRegisterFloat("Input.MouseSpeedX", &mouseSensX, -30.f, 30.f);
+ 	configRegisterFloat("Input.MouseSpeedY", &mouseSensY, -30.f, 30.f);
++	configRegisterInt("Input.GyroMode", &gyroMode, GYRO_MODE_OFF, GYRO_MODE_AIM);
++	configRegisterFloat("Input.GyroSpeedX", &gyroSensX, -30.f, 30.f);
++	configRegisterFloat("Input.GyroSpeedY", &gyroSensY, -30.f, 30.f);
++	configRegisterFloat("Input.GyroDeadzone", &gyroDeadzone, 0.f, 20.f);
+ 	configRegisterInt("Input.FakeGamepads", &fakeControllers, 0, 4);
+ 	configRegisterInt("Input.FirstGamepadNum", &firstController, 0, 3);
+ 	configRegisterInt("Input.UseHIDAPI", &useHIDAPI, 0, 1);
+--- a/port/include/input.h
++++ b/port/include/input.h
+@@ -229,6 +229,22 @@
+ void inputMouseGetSpeed(f32 *x, f32 *y);
+ void inputMouseSetSpeed(f32 x, f32 y);
+ 
++// gyro aiming; only applies to the controller assigned to player 1
++// returns 1 if player 1's controller has a gyro that can be used
++s32 inputGyroSupported(void);
++
++// 0 = off, 1 = always on, 2 = only while the aim button is held
++s32 inputGyroGetMode(void);
++void inputGyroSetMode(s32 mode);
++
++// sensitivity for yaw (x) and pitch (y); negative values invert the axis
++void inputGyroGetSpeed(f32 *x, f32 *y);
++void inputGyroSetSpeed(f32 x, f32 y);
++
++// deadzone in degrees per second
++f32 inputGyroGetDeadzone(void);
++void inputGyroSetDeadzone(f32 deadzone);
++
+ s32 inputMouseIsEnabled(void);
+ void inputMouseEnable(s32 enabled);
+ 
+--- a/port/src/optionsmenu.c
++++ b/port/src/optionsmenu.c
+@@ -526,6 +526,228 @@
+ 	NULL,
+ };
+ 
++static bool menuGyroDisabled(void)
++{
++	// gyro only applies to player 1's controller and only if it actually has a gyro
++	return g_ExtMenuPlayer != 0 || !inputGyroSupported();
++}
++
++static MenuItemHandlerResult menuhandlerGyroMode(s32 operation, struct menuitem *item, union handlerdata *data)
++{
++	static const char *opts[] = {
++		"Off",
++		"Always",
++		"While Aiming"
++	};
++
++	switch (operation) {
++	case MENUOP_GETOPTIONCOUNT:
++		data->dropdown.value = ARRAYCOUNT(opts);
++		break;
++	case MENUOP_GETOPTIONTEXT:
++		return (intptr_t)opts[data->dropdown.value];
++	case MENUOP_SET:
++		inputGyroSetMode(data->dropdown.value);
++		break;
++	case MENUOP_GETSELECTEDINDEX:
++		data->dropdown.value = inputGyroGetMode();
++		break;
++	case MENUOP_CHECKDISABLED:
++		return menuGyroDisabled();
++	}
++
++	return 0;
++}
++
++static MenuItemHandlerResult menuhandlerGyroSpeedX(s32 operation, struct menuitem *item, union handlerdata *data)
++{
++	f32 x, y;
++
++	switch (operation) {
++	case MENUOP_GETSLIDER:
++		inputGyroGetSpeed(&x, &y);
++		data->slider.value = fabsf(x) * 100.f + 0.5f;
++		break;
++	case MENUOP_SET:
++		inputGyroGetSpeed(&x, &y);
++		// keep the current inversion
++		inputGyroSetSpeed(copysignf((f32)data->slider.value / 100.f, x), y);
++		break;
++	case MENUOP_GETSLIDERLABEL:
++		sprintf(data->slider.label, "%.2f", (f32)data->slider.value / 100.f);
++		break;
++	case MENUOP_CHECKDISABLED:
++		return menuGyroDisabled();
++	}
++
++	return 0;
++}
++
++static MenuItemHandlerResult menuhandlerGyroSpeedY(s32 operation, struct menuitem *item, union handlerdata *data)
++{
++	f32 x, y;
++
++	switch (operation) {
++	case MENUOP_GETSLIDER:
++		inputGyroGetSpeed(&x, &y);
++		data->slider.value = fabsf(y) * 100.f + 0.5f;
++		break;
++	case MENUOP_SET:
++		inputGyroGetSpeed(&x, &y);
++		inputGyroSetSpeed(x, copysignf((f32)data->slider.value / 100.f, y));
++		break;
++	case MENUOP_GETSLIDERLABEL:
++		sprintf(data->slider.label, "%.2f", (f32)data->slider.value / 100.f);
++		break;
++	case MENUOP_CHECKDISABLED:
++		return menuGyroDisabled();
++	}
++
++	return 0;
++}
++
++static MenuItemHandlerResult menuhandlerGyroInvertX(s32 operation, struct menuitem *item, union handlerdata *data)
++{
++	f32 x, y;
++
++	switch (operation) {
++	case MENUOP_GET:
++		inputGyroGetSpeed(&x, &y);
++		return signbit(x) != 0;
++	case MENUOP_SET:
++		inputGyroGetSpeed(&x, &y);
++		inputGyroSetSpeed(copysignf(x, data->checkbox.value ? -1.f : 1.f), y);
++		break;
++	case MENUOP_CHECKDISABLED:
++		return menuGyroDisabled();
++	}
++
++	return 0;
++}
++
++static MenuItemHandlerResult menuhandlerGyroInvertY(s32 operation, struct menuitem *item, union handlerdata *data)
++{
++	f32 x, y;
++
++	switch (operation) {
++	case MENUOP_GET:
++		inputGyroGetSpeed(&x, &y);
++		return signbit(y) != 0;
++	case MENUOP_SET:
++		inputGyroGetSpeed(&x, &y);
++		inputGyroSetSpeed(x, copysignf(y, data->checkbox.value ? -1.f : 1.f));
++		break;
++	case MENUOP_CHECKDISABLED:
++		return menuGyroDisabled();
++	}
++
++	return 0;
++}
++
++static MenuItemHandlerResult menuhandlerGyroDeadzone(s32 operation, struct menuitem *item, union handlerdata *data)
++{
++	switch (operation) {
++	case MENUOP_GETSLIDER:
++		data->slider.value = inputGyroGetDeadzone() * 10.f + 0.5f;
++		break;
++	case MENUOP_SET:
++		inputGyroSetDeadzone((f32)data->slider.value / 10.f);
++		break;
++	case MENUOP_GETSLIDERLABEL:
++		sprintf(data->slider.label, "%.1f", (f32)data->slider.value / 10.f);
++		break;
++	case MENUOP_CHECKDISABLED:
++		return menuGyroDisabled();
++	}
++
++	return 0;
++}
++
++struct menuitem g_ExtendedGyroMenuItems[] = {
++	{
++		MENUITEMTYPE_DROPDOWN,
++		0,
++		MENUITEMFLAG_LITERAL_TEXT,
++		(uintptr_t)"Gyro Aiming",
++		0,
++		menuhandlerGyroMode,
++	},
++	{
++		MENUITEMTYPE_SEPARATOR,
++		0,
++		0,
++		0,
++		0,
++		NULL,
++	},
++	{
++		MENUITEMTYPE_SLIDER,
++		0,
++		MENUITEMFLAG_LITERAL_TEXT | MENUITEMFLAG_SLIDER_WIDE,
++		(uintptr_t)"Gyro Speed X (Yaw)",
++		1000,
++		menuhandlerGyroSpeedX,
++	},
++	{
++		MENUITEMTYPE_SLIDER,
++		0,
++		MENUITEMFLAG_LITERAL_TEXT | MENUITEMFLAG_SLIDER_WIDE,
++		(uintptr_t)"Gyro Speed Y (Pitch)",
++		1000,
++		menuhandlerGyroSpeedY,
++	},
++	{
++		MENUITEMTYPE_CHECKBOX,
++		0,
++		MENUITEMFLAG_LITERAL_TEXT,
++		(uintptr_t)"Invert Yaw",
++		0,
++		menuhandlerGyroInvertX,
++	},
++	{
++		MENUITEMTYPE_CHECKBOX,
++		0,
++		MENUITEMFLAG_LITERAL_TEXT,
++		(uintptr_t)"Invert Pitch",
++		0,
++		menuhandlerGyroInvertY,
++	},
++	{
++		MENUITEMTYPE_SLIDER,
++		0,
++		MENUITEMFLAG_LITERAL_TEXT | MENUITEMFLAG_SLIDER_WIDE,
++		(uintptr_t)"Gyro Deadzone",
++		200,
++		menuhandlerGyroDeadzone,
++	},
++	{
++		MENUITEMTYPE_SEPARATOR,
++		0,
++		0,
++		0,
++		0,
++		NULL,
++	},
++	{
++		MENUITEMTYPE_SELECTABLE,
++		0,
++		MENUITEMFLAG_SELECTABLE_CLOSESDIALOG,
++		L_OPTIONS_213, // "Back"
++		0,
++		NULL,
++	},
++	{ MENUITEMTYPE_END },
++};
++
++struct menudialogdef g_ExtendedGyroMenuDialog = {
++	MENUDIALOGTYPE_DEFAULT,
++	(uintptr_t)"Gyro Settings (Player 1)",
++	g_ExtendedGyroMenuItems,
++	NULL,
++	MENUDIALOGFLAG_LITERAL_TEXT,
++	NULL,
++};
++
+ static MenuItemHandlerResult menuhandlerVibration(s32 operation, struct menuitem *item, union handlerdata *data)
+ {
+ 	switch (operation) {
+@@ -650,6 +872,14 @@
+ 		(void *)&g_ExtendedStickMenuDialog,
+ 	},
+ 	{
++		MENUITEMTYPE_SELECTABLE,
++		0,
++		MENUITEMFLAG_SELECTABLE_OPENSDIALOG | MENUITEMFLAG_LITERAL_TEXT,
++		(uintptr_t)"Gyro Settings...\n",
++		0,
++		(void *)&g_ExtendedGyroMenuDialog,
++	},
++	{
+ 		MENUITEMTYPE_SLIDER,
+ 		0,
+ 		MENUITEMFLAG_LITERAL_TEXT,
