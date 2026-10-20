@@ -1,0 +1,66 @@
+name: Build Switch .nro
+
+# Builds only the Nintendo Switch version (pd.arm64.nro) using the same devkitA64
+# docker image and build script as the main CI, but works on any branch.
+
+on:
+  push:
+    branches: [ "**" ]
+  workflow_dispatch:
+    inputs:
+      all_regions:
+        description: "Also build the PAL and JPN versions (slower)"
+        type: boolean
+        default: false
+
+# cancel an older run of the same branch when a new commit is pushed
+concurrency:
+  group: switch-nro-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-nswitch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install devkitA64 docker image
+        run: sudo docker pull devkitpro/devkita64:latest
+
+      - name: Build pd.arm64.nro (US/NTSC)
+        run: sudo docker run --name pd --rm -v `pwd`:`pwd` -w `pwd` devkitpro/devkita64:latest bash ./tools/buildscripts/nswitch_docker.sh build
+
+      - name: Build pd.pal.arm64.nro (PAL)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.all_regions }}
+        run: sudo docker run --name pd --rm -v `pwd`:`pwd` -w `pwd` devkitpro/devkita64:latest bash ./tools/buildscripts/nswitch_docker.sh build_pal -DROMID=pal-final
+
+      - name: Build pd.jpn.arm64.nro (JPN)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.all_regions }}
+        run: sudo docker run --name pd --rm -v `pwd`:`pwd` -w `pwd` devkitpro/devkita64:latest bash ./tools/buildscripts/nswitch_docker.sh build_jpn -DROMID=jpn-final
+
+      - name: Prepare SD card layout
+        run: |
+          mkdir -p bin/perfectdark/data
+          cp build/pd.arm64.nro bin/perfectdark/
+          touch bin/perfectdark/data/put_your_rom_here.txt
+          if [ -f build_pal/pd.pal.arm64.nro ]; then
+            mkdir -p bin/perfectdark_pal/data
+            cp build_pal/pd.pal.arm64.nro bin/perfectdark_pal/
+            touch bin/perfectdark_pal/data/put_your_rom_here.txt
+          fi
+          if [ -f build_jpn/pd.jpn.arm64.nro ]; then
+            mkdir -p bin/perfectdark_jpn/data
+            cp build_jpn/pd.jpn.arm64.nro bin/perfectdark_jpn/
+            touch bin/perfectdark_jpn/data/put_your_rom_here.txt
+          fi
+          ls -laR bin
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pd-arm64-nswitch
+          path: bin/
+          retention-days: 30
+          if-no-files-found: error
