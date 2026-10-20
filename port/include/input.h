@@ -229,6 +229,22 @@ void inputMouseGetAbsScaledDelta(f32 *dx, f32 *dy);
 void inputMouseGetSpeed(f32 *x, f32 *y);
 void inputMouseSetSpeed(f32 x, f32 y);
 
+// gyro aiming; only applies to the controller assigned to player 1
+// returns 1 if player 1's controller has a gyro that can be used
+s32 inputGyroSupported(void);
+
+// 0 = off, 1 = always on, 2 = only while the aim button is held
+s32 inputGyroGetMode(void);
+void inputGyroSetMode(s32 mode);
+
+// sensitivity for yaw (x) and pitch (y); negative values invert the axis
+void inputGyroGetSpeed(f32 *x, f32 *y);
+void inputGyroSetSpeed(f32 x, f32 y);
+
+// deadzone in degrees per second
+f32 inputGyroGetDeadzone(void);
+void inputGyroSetDeadzone(f32 deadzone);
+
 s32 inputMouseIsEnabled(void);
 void inputMouseEnable(s32 enabled);
 
