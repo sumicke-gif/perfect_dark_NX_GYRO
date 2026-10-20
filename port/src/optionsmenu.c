@@ -526,6 +526,228 @@ struct menudialogdef g_ExtendedStickMenuDialog = {
 	NULL,
 };
 
+static bool menuGyroDisabled(void)
+{
+	// gyro only applies to player 1's controller and only if it actually has a gyro
+	return g_ExtMenuPlayer != 0 || !inputGyroSupported();
+}
+
+static MenuItemHandlerResult menuhandlerGyroMode(s32 operation, struct menuitem *item, union handlerdata *data)
+{
+	static const char *opts[] = {
+		"Off",
+		"Always",
+		"While Aiming"
+	};
+
+	switch (operation) {
+	case MENUOP_GETOPTIONCOUNT:
+		data->dropdown.value = ARRAYCOUNT(opts);
+		break;
+	case MENUOP_GETOPTIONTEXT:
+		return (intptr_t)opts[data->dropdown.value];
+	case MENUOP_SET:
+		inputGyroSetMode(data->dropdown.value);
+		break;
+	case MENUOP_GETSELECTEDINDEX:
+		data->dropdown.value = inputGyroGetMode();
+		break;
+	case MENUOP_CHECKDISABLED:
+		return menuGyroDisabled();
+	}
+
+	return 0;
+}
+
+static MenuItemHandlerResult menuhandlerGyroSpeedX(s32 operation, struct menuitem *item, union handlerdata *data)
+{
+	f32 x, y;
+
+	switch (operation) {
+	case MENUOP_GETSLIDER:
+		inputGyroGetSpeed(&x, &y);
+		data->slider.value = fabsf(x) * 100.f + 0.5f;
+		break;
+	case MENUOP_SET:
+		inputGyroGetSpeed(&x, &y);
+		// keep the current inversion
+		inputGyroSetSpeed(copysignf((f32)data->slider.value / 100.f, x), y);
+		break;
+	case MENUOP_GETSLIDERLABEL:
+		sprintf(data->slider.label, "%.2f", (f32)data->slider.value / 100.f);
+		break;
+	case MENUOP_CHECKDISABLED:
+		return menuGyroDisabled();
+	}
+
+	return 0;
+}
+
+static MenuItemHandlerResult menuhandlerGyroSpeedY(s32 operation, struct menuitem *item, union handlerdata *data)
+{
+	f32 x, y;
+
+	switch (operation) {
+	case MENUOP_GETSLIDER:
+		inputGyroGetSpeed(&x, &y);
+		data->slider.value = fabsf(y) * 100.f + 0.5f;
+		break;
+	case MENUOP_SET:
+		inputGyroGetSpeed(&x, &y);
+		inputGyroSetSpeed(x, copysignf((f32)data->slider.value / 100.f, y));
+		break;
+	case MENUOP_GETSLIDERLABEL:
+		sprintf(data->slider.label, "%.2f", (f32)data->slider.value / 100.f);
+		break;
+	case MENUOP_CHECKDISABLED:
+		return menuGyroDisabled();
+	}
+
+	return 0;
+}
+
+static MenuItemHandlerResult menuhandlerGyroInvertX(s32 operation, struct menuitem *item, union handlerdata *data)
+{
+	f32 x, y;
+
+	switch (operation) {
+	case MENUOP_GET:
+		inputGyroGetSpeed(&x, &y);
+		return signbit(x) != 0;
+	case MENUOP_SET:
+		inputGyroGetSpeed(&x, &y);
+		inputGyroSetSpeed(copysignf(x, data->checkbox.value ? -1.f : 1.f), y);
+		break;
+	case MENUOP_CHECKDISABLED:
+		return menuGyroDisabled();
+	}
+
+	return 0;
+}
+
+static MenuItemHandlerResult menuhandlerGyroInvertY(s32 operation, struct menuitem *item, union handlerdata *data)
+{
+	f32 x, y;
+
+	switch (operation) {
+	case MENUOP_GET:
+		inputGyroGetSpeed(&x, &y);
+		return signbit(y) != 0;
+	case MENUOP_SET:
+		inputGyroGetSpeed(&x, &y);
+		inputGyroSetSpeed(x, copysignf(y, data->checkbox.value ? -1.f : 1.f));
+		break;
+	case MENUOP_CHECKDISABLED:
+		return menuGyroDisabled();
+	}
+
+	return 0;
+}
+
+static MenuItemHandlerResult menuhandlerGyroDeadzone(s32 operation, struct menuitem *item, union handlerdata *data)
+{
+	switch (operation) {
+	case MENUOP_GETSLIDER:
+		data->slider.value = inputGyroGetDeadzone() * 10.f + 0.5f;
+		break;
+	case MENUOP_SET:
+		inputGyroSetDeadzone((f32)data->slider.value / 10.f);
+		break;
+	case MENUOP_GETSLIDERLABEL:
+		sprintf(data->slider.label, "%.1f", (f32)data->slider.value / 10.f);
+		break;
+	case MENUOP_CHECKDISABLED:
+		return menuGyroDisabled();
+	}
+
+	return 0;
+}
+
+struct menuitem g_ExtendedGyroMenuItems[] = {
+	{
+		MENUITEMTYPE_DROPDOWN,
+		0,
+		MENUITEMFLAG_LITERAL_TEXT,
+		(uintptr_t)"Gyro Aiming",
+		0,
+		menuhandlerGyroMode,
+	},
+	{
+		MENUITEMTYPE_SEPARATOR,
+		0,
+		0,
+		0,
+		0,
+		NULL,
+	},
+	{
+		MENUITEMTYPE_SLIDER,
+		0,
+		MENUITEMFLAG_LITERAL_TEXT | MENUITEMFLAG_SLIDER_WIDE,
+		(uintptr_t)"Gyro Speed X (Yaw)",
+		1000,
+		menuhandlerGyroSpeedX,
+	},
+	{
+		MENUITEMTYPE_SLIDER,
+		0,
+		MENUITEMFLAG_LITERAL_TEXT | MENUITEMFLAG_SLIDER_WIDE,
+		(uintptr_t)"Gyro Speed Y (Pitch)",
+		1000,
+		menuhandlerGyroSpeedY,
+	},
+	{
+		MENUITEMTYPE_CHECKBOX,
+		0,
+		MENUITEMFLAG_LITERAL_TEXT,
+		(uintptr_t)"Invert Yaw",
+		0,
+		menuhandlerGyroInvertX,
+	},
+	{
+		MENUITEMTYPE_CHECKBOX,
+		0,
+		MENUITEMFLAG_LITERAL_TEXT,
+		(uintptr_t)"Invert Pitch",
+		0,
+		menuhandlerGyroInvertY,
+	},
+	{
+		MENUITEMTYPE_SLIDER,
+		0,
+		MENUITEMFLAG_LITERAL_TEXT | MENUITEMFLAG_SLIDER_WIDE,
+		(uintptr_t)"Gyro Deadzone",
+		200,
+		menuhandlerGyroDeadzone,
+	},
+	{
+		MENUITEMTYPE_SEPARATOR,
+		0,
+		0,
+		0,
+		0,
+		NULL,
+	},
+	{
+		MENUITEMTYPE_SELECTABLE,
+		0,
+		MENUITEMFLAG_SELECTABLE_CLOSESDIALOG,
+		L_OPTIONS_213, // "Back"
+		0,
+		NULL,
+	},
+	{ MENUITEMTYPE_END },
+};
+
+struct menudialogdef g_ExtendedGyroMenuDialog = {
+	MENUDIALOGTYPE_DEFAULT,
+	(uintptr_t)"Gyro Settings (Player 1)",
+	g_ExtendedGyroMenuItems,
+	NULL,
+	MENUDIALOGFLAG_LITERAL_TEXT,
+	NULL,
+};
+
 static MenuItemHandlerResult menuhandlerVibration(s32 operation, struct menuitem *item, union handlerdata *data)
 {
 	switch (operation) {
@@ -648,6 +870,14 @@ struct menuitem g_ExtendedControllerMenuItems[] = {
 		(uintptr_t)"Stick Settings...\n",
 		0,
 		(void *)&g_ExtendedStickMenuDialog,
+	},
+	{
+		MENUITEMTYPE_SELECTABLE,
+		0,
+		MENUITEMFLAG_SELECTABLE_OPENSDIALOG | MENUITEMFLAG_LITERAL_TEXT,
+		(uintptr_t)"Gyro Settings...\n",
+		0,
+		(void *)&g_ExtendedGyroMenuDialog,
 	},
 	{
 		MENUITEMTYPE_SLIDER,
