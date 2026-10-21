@@ -110,26 +110,35 @@ enum gyromode {
 // SDL gyro axes (rad/s): x = pitch, y = yaw, z = roll
 #define GYRO_AXIS_PITCH 0
 #define GYRO_AXIS_YAW 1
-#define GYRO_AXIS_ROLL 2 // deliberately unused: turning is driven by yaw only
+#define GYRO_AXIS_ROLL 2 // only used for turning when "Handheld Axis" is on
 
 #define GYRO_RAD_TO_DEG 57.2957795f
-#define GYRO_UNITS_PER_DEG 0.15f // converts degrees turned per frame into mouselook units; tune to taste
-#define GYRO_MAX_DELTA 1.f // per frame safety limit in mouselook units
-#define GYRO_BIAS_THRESHOLD 3.f // deg/s; below this on both axes the pad is considered stationary
+// the game turns the player 3.5 degrees per mouselook unit (at the default FOV), on both axes,
+// so this makes a sensitivity of 1.0 match the real world: turning the controller 360 degrees turns you 360 degrees
+#define GYRO_UNITS_PER_DEG (1.f / 3.5f)
+#define GYRO_MAX_DEG_PER_FRAME 30.f // safety limit on the real-world rotation per frame, before sensitivity
+#define GYRO_BIAS_THRESHOLD 3.f // deg/s; below this on all axes the pad is considered stationary
 #define GYRO_BIAS_RATE 0.02f // how fast the drift estimate follows the stationary readings
 #define GYRO_MAX_DT 0.1f // seconds; ignore longer hitches
 
+// defaults, also used by the "Reset to Defaults" menu item
 #ifdef PLATFORM_NSWITCH
-static s32 gyroMode = GYRO_MODE_AIM;
+#define GYRO_DEFAULT_MODE GYRO_MODE_AIM
 #else
-static s32 gyroMode = GYRO_MODE_OFF;
+#define GYRO_DEFAULT_MODE GYRO_MODE_OFF
 #endif
-static f32 gyroSensX = 1.f; // negative values invert
-static f32 gyroSensY = 1.f;
-static f32 gyroDeadzone = 0.3f; // deg/s
+#define GYRO_DEFAULT_SENS 1.f
+#define GYRO_DEFAULT_HANDHELD_AXIS 0
+#define GYRO_DEFAULT_DEADZONE 0.3f // deg/s
+
+static s32 gyroMode = GYRO_DEFAULT_MODE;
+static f32 gyroSensH = GYRO_DEFAULT_SENS; // horizontal sensitivity, negative values invert
+static f32 gyroSensV = GYRO_DEFAULT_SENS; // vertical sensitivity, negative values invert
+static s32 gyroHandheldAxis = GYRO_DEFAULT_HANDHELD_AXIS; // 0 = turn with yaw (around gravity), 1 = turn with roll (around the screen's axis)
+static f32 gyroDeadzone = GYRO_DEFAULT_DEADZONE; // deg/s
 static f32 gyroDX = 0.f; // this frame's gyro delta in mouselook units
 static f32 gyroDY = 0.f;
-static f32 gyroBias[2]; // pitch, yaw drift estimate in deg/s
+static f32 gyroBias[3]; // pitch, yaw, roll drift estimate in deg/s
 static u64 gyroLastTime = 0;
 #ifdef INPUT_HAVE_GYRO
 static s32 gyroEnabledOnPad = 0;
@@ -388,7 +397,7 @@ static inline void inputInitController(const s32 cidx, const s32 jidx)
 #ifdef INPUT_HAVE_GYRO
 	if (cidx == 0) {
 		gyroEnabledOnPad = 0;
-		gyroBias[0] = gyroBias[1] = 0.f;
+		gyroBias[0] = gyroBias[1] = gyroBias[2] = 0.f;
 		if (SDL_GameControllerHasSensor(pads[cidx], SDL_SENSOR_GYRO) &&
 				SDL_GameControllerSetSensorEnabled(pads[cidx], SDL_SENSOR_GYRO, SDL_TRUE) == 0) {
 			gyroEnabledOnPad = 1;
@@ -985,8 +994,9 @@ static inline void inputUpdateMouse(void)
 	}
 }
 
-// reads the current pitch and yaw rates in deg/s, returns 1 if there was a sample
-static inline s32 inputReadGyro(f32 *pitch, f32 *yaw)
+// reads the current pitch, yaw and roll rates in deg/s, returns 1 if there was a sample
+// yaw is positive for a turn to the left and roll is positive for a counter-clockwise roll
+static inline s32 inputReadGyro(f32 *pitch, f32 *yaw, f32 *roll)
 {
 #ifdef INPUT_HAVE_GYRO
 	if (gyroEnabledOnPad && pads[0]) {
@@ -996,6 +1006,7 @@ static inline s32 inputReadGyro(f32 *pitch, f32 *yaw)
 		}
 		*pitch = g[GYRO_AXIS_PITCH] * GYRO_RAD_TO_DEG;
 		*yaw = g[GYRO_AXIS_YAW] * GYRO_RAD_TO_DEG;
+		*roll = g[GYRO_AXIS_ROLL] * GYRO_RAD_TO_DEG;
 		return 1;
 	}
 #endif
@@ -1004,12 +1015,18 @@ static inline s32 inputReadGyro(f32 *pitch, f32 *yaw)
 		f32 p, y, r;
 		if (nxGyroRead(&p, &y, &r)) {
 			*pitch = p * gyroNxUnit;
-			*yaw = y * gyroNxUnit; // yaw is already measured around gravity, never around the roll axis
+			*yaw = y * gyroNxUnit; // already measured around gravity, so it stays a left/right turn however the device is held
+			*roll = r * gyroNxUnit;
 			return 1;
 		}
 	}
 #endif
 	return 0;
+}
+
+static inline f32 inputGyroClamp(f32 v, f32 limit)
+{
+	return (v < -limit) ? -limit : (v > limit) ? limit : v;
 }
 
 static inline void inputUpdateGyro(void)
@@ -1033,32 +1050,38 @@ static inline void inputUpdateGyro(void)
 		return;
 	}
 
-	f32 pitch, yaw;
-	if (!inputReadGyro(&pitch, &yaw)) {
+	f32 rate[3]; // pitch, yaw, roll
+	if (!inputReadGyro(&rate[0], &rate[1], &rate[2])) {
 		return;
 	}
 
 	// track drift: while the pad is sitting still, slowly follow whatever it reports
-	if (fabsf(pitch - gyroBias[0]) < GYRO_BIAS_THRESHOLD && fabsf(yaw - gyroBias[1]) < GYRO_BIAS_THRESHOLD) {
-		gyroBias[0] += (pitch - gyroBias[0]) * GYRO_BIAS_RATE;
-		gyroBias[1] += (yaw - gyroBias[1]) * GYRO_BIAS_RATE;
+	if (fabsf(rate[0] - gyroBias[0]) < GYRO_BIAS_THRESHOLD &&
+			fabsf(rate[1] - gyroBias[1]) < GYRO_BIAS_THRESHOLD &&
+			fabsf(rate[2] - gyroBias[2]) < GYRO_BIAS_THRESHOLD) {
+		for (s32 i = 0; i < 3; ++i) {
+			gyroBias[i] += (rate[i] - gyroBias[i]) * GYRO_BIAS_RATE;
+		}
 	}
 
 	if (gyroMode == GYRO_MODE_AIM && !inputButtonPressed(0, CONT_R)) {
 		return;
 	}
 
-	pitch -= gyroBias[0];
-	yaw -= gyroBias[1];
-	if (fabsf(yaw) < gyroDeadzone) yaw = 0.f;
-	if (fabsf(pitch) < gyroDeadzone) pitch = 0.f;
+	// horizontal turning comes from yaw, or from roll when the handheld axis is selected
+	f32 horiz = rate[gyroHandheldAxis ? 2 : 1] - gyroBias[gyroHandheldAxis ? 2 : 1];
+	f32 vert = rate[0] - gyroBias[0];
+	if (fabsf(horiz) < gyroDeadzone) horiz = 0.f;
+	if (fabsf(vert) < gyroDeadzone) vert = 0.f;
 
-	// positive mouse dx turns right and positive dy looks down; positive gyro yaw is a turn to the left
-	// and positive gyro pitch is looking up, so both get negated. flip with negative GyroSpeedX/Y if it feels wrong.
-	f32 dx = -yaw * dt * GYRO_UNITS_PER_DEG * gyroSensX;
-	f32 dy = -pitch * dt * GYRO_UNITS_PER_DEG * gyroSensY;
-	gyroDX = (dx < -GYRO_MAX_DELTA) ? -GYRO_MAX_DELTA : (dx > GYRO_MAX_DELTA) ? GYRO_MAX_DELTA : dx;
-	gyroDY = (dy < -GYRO_MAX_DELTA) ? -GYRO_MAX_DELTA : (dy > GYRO_MAX_DELTA) ? GYRO_MAX_DELTA : dy;
+	// real-world degrees turned this frame
+	const f32 degH = inputGyroClamp(horiz * dt, GYRO_MAX_DEG_PER_FRAME);
+	const f32 degV = inputGyroClamp(vert * dt, GYRO_MAX_DEG_PER_FRAME);
+
+	// positive mouse dx turns right and positive dy looks down; positive gyro yaw/roll is a turn to the left
+	// and positive gyro pitch is looking up, so both get negated. flip with negative sensitivity (the invert options).
+	gyroDX = -degH * GYRO_UNITS_PER_DEG * gyroSensH;
+	gyroDY = -degV * GYRO_UNITS_PER_DEG * gyroSensV;
 }
 
 void inputUpdate(void)
@@ -1457,16 +1480,35 @@ void inputGyroSetMode(s32 mode)
 	gyroMode = (mode < GYRO_MODE_OFF) ? GYRO_MODE_OFF : (mode > GYRO_MODE_AIM) ? GYRO_MODE_AIM : mode;
 }
 
-void inputGyroGetSpeed(f32 *x, f32 *y)
+void inputGyroGetSpeed(f32 *horizontal, f32 *vertical)
 {
-	*x = gyroSensX;
-	*y = gyroSensY;
+	*horizontal = gyroSensH;
+	*vertical = gyroSensV;
 }
 
-void inputGyroSetSpeed(f32 x, f32 y)
+void inputGyroSetSpeed(f32 horizontal, f32 vertical)
 {
-	gyroSensX = x;
-	gyroSensY = y;
+	gyroSensH = horizontal;
+	gyroSensV = vertical;
+}
+
+s32 inputGyroGetHandheldAxis(void)
+{
+	return gyroHandheldAxis;
+}
+
+void inputGyroSetHandheldAxis(s32 enabled)
+{
+	gyroHandheldAxis = !!enabled;
+}
+
+void inputGyroResetDefaults(void)
+{
+	gyroMode = GYRO_DEFAULT_MODE;
+	gyroSensH = GYRO_DEFAULT_SENS;
+	gyroSensV = GYRO_DEFAULT_SENS;
+	gyroHandheldAxis = GYRO_DEFAULT_HANDHELD_AXIS;
+	gyroDeadzone = GYRO_DEFAULT_DEADZONE;
 }
 
 f32 inputGyroGetDeadzone(void)
@@ -1712,8 +1754,9 @@ PD_CONSTRUCTOR static void inputConfigInit(void)
 	configRegisterFloat("Input.MouseSpeedX", &mouseSensX, -30.f, 30.f);
 	configRegisterFloat("Input.MouseSpeedY", &mouseSensY, -30.f, 30.f);
 	configRegisterInt("Input.GyroMode", &gyroMode, GYRO_MODE_OFF, GYRO_MODE_AIM);
-	configRegisterFloat("Input.GyroSpeedX", &gyroSensX, -30.f, 30.f);
-	configRegisterFloat("Input.GyroSpeedY", &gyroSensY, -30.f, 30.f);
+	configRegisterFloat("Input.GyroSpeedH", &gyroSensH, -30.f, 30.f);
+	configRegisterFloat("Input.GyroSpeedV", &gyroSensV, -30.f, 30.f);
+	configRegisterInt("Input.GyroHandheldAxis", &gyroHandheldAxis, 0, 1);
 	configRegisterFloat("Input.GyroDeadzone", &gyroDeadzone, 0.f, 20.f);
 #ifdef INPUT_HAVE_NXGYRO
 	configRegisterFloat("Input.GyroNxUnit", &gyroNxUnit, 0.01f, 100000.f);

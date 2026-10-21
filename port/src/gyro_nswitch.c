@@ -48,8 +48,9 @@ static void updateUp(const HidVector *accel)
 		return;
 	}
 
-	// at rest the accelerometer points away from the ground
-	const float n[3] = { accel->x / mag, accel->y / mag, accel->z / mag };
+	// libnx reports the direction of gravity (towards the ground), so negate it to get "up".
+	// this makes yaw positive for a turn to the left, matching SDL's convention
+	const float n[3] = { -accel->x / mag, -accel->y / mag, -accel->z / mag };
 
 	if (!upValid) {
 		memcpy(up, n, sizeof(up));

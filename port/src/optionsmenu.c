@@ -551,7 +551,20 @@ static MenuItemHandlerResult menuhandlerGyroMode(s32 operation, struct menuitem 
 	return 0;
 }
 
-static MenuItemHandlerResult menuhandlerGyroSpeedX(s32 operation, struct menuitem *item, union handlerdata *data)
+static MenuItemHandlerResult menuhandlerGyroHandheldAxis(s32 operation, struct menuitem *item, union handlerdata *data)
+{
+	switch (operation) {
+	case MENUOP_GET:
+		return inputGyroGetHandheldAxis();
+	case MENUOP_SET:
+		inputGyroSetHandheldAxis(data->checkbox.value);
+		break;
+	}
+
+	return 0;
+}
+
+static MenuItemHandlerResult menuhandlerGyroSpeedH(s32 operation, struct menuitem *item, union handlerdata *data)
 {
 	f32 x, y;
 
@@ -573,7 +586,7 @@ static MenuItemHandlerResult menuhandlerGyroSpeedX(s32 operation, struct menuite
 	return 0;
 }
 
-static MenuItemHandlerResult menuhandlerGyroSpeedY(s32 operation, struct menuitem *item, union handlerdata *data)
+static MenuItemHandlerResult menuhandlerGyroSpeedV(s32 operation, struct menuitem *item, union handlerdata *data)
 {
 	f32 x, y;
 
@@ -594,7 +607,7 @@ static MenuItemHandlerResult menuhandlerGyroSpeedY(s32 operation, struct menuite
 	return 0;
 }
 
-static MenuItemHandlerResult menuhandlerGyroInvertX(s32 operation, struct menuitem *item, union handlerdata *data)
+static MenuItemHandlerResult menuhandlerGyroInvertH(s32 operation, struct menuitem *item, union handlerdata *data)
 {
 	f32 x, y;
 
@@ -611,7 +624,7 @@ static MenuItemHandlerResult menuhandlerGyroInvertX(s32 operation, struct menuit
 	return 0;
 }
 
-static MenuItemHandlerResult menuhandlerGyroInvertY(s32 operation, struct menuitem *item, union handlerdata *data)
+static MenuItemHandlerResult menuhandlerGyroInvertV(s32 operation, struct menuitem *item, union handlerdata *data)
 {
 	f32 x, y;
 
@@ -645,6 +658,15 @@ static MenuItemHandlerResult menuhandlerGyroDeadzone(s32 operation, struct menui
 	return 0;
 }
 
+static MenuItemHandlerResult menuhandlerGyroReset(s32 operation, struct menuitem *item, union handlerdata *data)
+{
+	if (operation == MENUOP_SET) {
+		inputGyroResetDefaults();
+	}
+
+	return 0;
+}
+
 struct menuitem g_ExtendedGyroMenuItems[] = {
 	{
 		MENUITEMTYPE_DROPDOWN,
@@ -653,6 +675,14 @@ struct menuitem g_ExtendedGyroMenuItems[] = {
 		(uintptr_t)"Gyro Aiming",
 		0,
 		menuhandlerGyroMode,
+	},
+	{
+		MENUITEMTYPE_CHECKBOX,
+		0,
+		MENUITEMFLAG_LITERAL_TEXT,
+		(uintptr_t)"Handheld Axis",
+		0,
+		menuhandlerGyroHandheldAxis,
 	},
 	{
 		MENUITEMTYPE_SEPARATOR,
@@ -666,33 +696,33 @@ struct menuitem g_ExtendedGyroMenuItems[] = {
 		MENUITEMTYPE_SLIDER,
 		0,
 		MENUITEMFLAG_LITERAL_TEXT | MENUITEMFLAG_SLIDER_WIDE,
-		(uintptr_t)"Gyro Speed X (Yaw)",
+		(uintptr_t)"Horizontal Sensitivity",
 		1000,
-		menuhandlerGyroSpeedX,
+		menuhandlerGyroSpeedH,
 	},
 	{
 		MENUITEMTYPE_SLIDER,
 		0,
 		MENUITEMFLAG_LITERAL_TEXT | MENUITEMFLAG_SLIDER_WIDE,
-		(uintptr_t)"Gyro Speed Y (Pitch)",
+		(uintptr_t)"Vertical Sensitivity",
 		1000,
-		menuhandlerGyroSpeedY,
+		menuhandlerGyroSpeedV,
 	},
 	{
 		MENUITEMTYPE_CHECKBOX,
 		0,
 		MENUITEMFLAG_LITERAL_TEXT,
-		(uintptr_t)"Invert Yaw",
+		(uintptr_t)"Invert Horizontal",
 		0,
-		menuhandlerGyroInvertX,
+		menuhandlerGyroInvertH,
 	},
 	{
 		MENUITEMTYPE_CHECKBOX,
 		0,
 		MENUITEMFLAG_LITERAL_TEXT,
-		(uintptr_t)"Invert Pitch",
+		(uintptr_t)"Invert Vertical",
 		0,
-		menuhandlerGyroInvertY,
+		menuhandlerGyroInvertV,
 	},
 	{
 		MENUITEMTYPE_SLIDER,
@@ -701,6 +731,22 @@ struct menuitem g_ExtendedGyroMenuItems[] = {
 		(uintptr_t)"Gyro Deadzone",
 		200,
 		menuhandlerGyroDeadzone,
+	},
+	{
+		MENUITEMTYPE_SEPARATOR,
+		0,
+		0,
+		0,
+		0,
+		NULL,
+	},
+	{
+		MENUITEMTYPE_SELECTABLE,
+		0,
+		MENUITEMFLAG_LITERAL_TEXT,
+		(uintptr_t)"Reset to Defaults\n",
+		0,
+		menuhandlerGyroReset,
 	},
 	{
 		MENUITEMTYPE_SEPARATOR,
