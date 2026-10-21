@@ -2055,7 +2055,7 @@ struct menuitem g_ExtendedBindsMenuItems[] = {
 		MENUITEMTYPE_SELECTABLE,
 		0,
 		MENUITEMFLAG_LITERAL_TEXT,
-		(uintptr_t)"Reset to PC Defaults\n",
+		(uintptr_t)"Reset to " PD_PLATFORM_NAME " Defaults\n",
 		0,
 		menuhandlerResetBindsPC,
 	},
