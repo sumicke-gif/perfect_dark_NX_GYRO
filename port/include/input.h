@@ -237,13 +237,21 @@ s32 inputGyroSupported(void);
 s32 inputGyroGetMode(void);
 void inputGyroSetMode(s32 mode);
 
-// sensitivity for yaw (x) and pitch (y); negative values invert the axis
-void inputGyroGetSpeed(f32 *x, f32 *y);
-void inputGyroSetSpeed(f32 x, f32 y);
+// horizontal and vertical sensitivity; 1.0 means turning the controller 360 degrees turns you 360 degrees
+// negative values invert the axis
+void inputGyroGetSpeed(f32 *horizontal, f32 *vertical);
+void inputGyroSetSpeed(f32 horizontal, f32 vertical);
+
+// "handheld axis": turn left/right by rolling the device (around the screen's axis) instead of by yawing it
+s32 inputGyroGetHandheldAxis(void);
+void inputGyroSetHandheldAxis(s32 enabled);
 
 // deadzone in degrees per second
 f32 inputGyroGetDeadzone(void);
 void inputGyroSetDeadzone(f32 deadzone);
+
+// puts every gyro setting back to its default
+void inputGyroResetDefaults(void);
 
 s32 inputMouseIsEnabled(void);
 void inputMouseEnable(s32 enabled);
