@@ -255,6 +255,12 @@ if(NOT EXTRA_LIBRARIES)
 endif()
 list(APPEND LIBS "${EXTRA_LIBRARIES}")
 
+# libnx is used directly for gyro input on the Switch
+if(NINTENDO_SWITCH)
+  include_directories(SYSTEM "${DEVKITPRO}/libnx/include")
+  list(APPEND LIBS nx)
+endif()
+
 # Sources
 
 file(GLOB_RECURSE SRC_PORT "${CMAKE_SOURCE_DIR}/port/*.c")
