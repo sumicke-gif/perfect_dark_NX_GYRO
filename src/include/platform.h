@@ -19,6 +19,13 @@
 	#warning "Unknown OS. Please add it to platform.h."
 #endif
 
+// name of the platform as shown in menus
+#if defined(PLATFORM_NSWITCH)
+	#define PD_PLATFORM_NAME "Switch"
+#else
+	#define PD_PLATFORM_NAME "PC"
+#endif
+
 // detect arch
 #if defined(__x86_64__) || defined(_M_X64)
 	#define PLATFORM_X86_64 1
