@@ -526,12 +526,6 @@ struct menudialogdef g_ExtendedStickMenuDialog = {
 	NULL,
 };
 
-static bool menuGyroDisabled(void)
-{
-	// gyro only applies to player 1's controller and only if it actually has a gyro
-	return g_ExtMenuPlayer != 0 || !inputGyroSupported();
-}
-
 static MenuItemHandlerResult menuhandlerGyroMode(s32 operation, struct menuitem *item, union handlerdata *data)
 {
 	static const char *opts[] = {
@@ -552,8 +546,6 @@ static MenuItemHandlerResult menuhandlerGyroMode(s32 operation, struct menuitem 
 	case MENUOP_GETSELECTEDINDEX:
 		data->dropdown.value = inputGyroGetMode();
 		break;
-	case MENUOP_CHECKDISABLED:
-		return menuGyroDisabled();
 	}
 
 	return 0;
@@ -576,8 +568,6 @@ static MenuItemHandlerResult menuhandlerGyroSpeedX(s32 operation, struct menuite
 	case MENUOP_GETSLIDERLABEL:
 		sprintf(data->slider.label, "%.2f", (f32)data->slider.value / 100.f);
 		break;
-	case MENUOP_CHECKDISABLED:
-		return menuGyroDisabled();
 	}
 
 	return 0;
@@ -599,8 +589,6 @@ static MenuItemHandlerResult menuhandlerGyroSpeedY(s32 operation, struct menuite
 	case MENUOP_GETSLIDERLABEL:
 		sprintf(data->slider.label, "%.2f", (f32)data->slider.value / 100.f);
 		break;
-	case MENUOP_CHECKDISABLED:
-		return menuGyroDisabled();
 	}
 
 	return 0;
@@ -618,8 +606,6 @@ static MenuItemHandlerResult menuhandlerGyroInvertX(s32 operation, struct menuit
 		inputGyroGetSpeed(&x, &y);
 		inputGyroSetSpeed(copysignf(x, data->checkbox.value ? -1.f : 1.f), y);
 		break;
-	case MENUOP_CHECKDISABLED:
-		return menuGyroDisabled();
 	}
 
 	return 0;
@@ -637,8 +623,6 @@ static MenuItemHandlerResult menuhandlerGyroInvertY(s32 operation, struct menuit
 		inputGyroGetSpeed(&x, &y);
 		inputGyroSetSpeed(x, copysignf(y, data->checkbox.value ? -1.f : 1.f));
 		break;
-	case MENUOP_CHECKDISABLED:
-		return menuGyroDisabled();
 	}
 
 	return 0;
@@ -656,8 +640,6 @@ static MenuItemHandlerResult menuhandlerGyroDeadzone(s32 operation, struct menui
 	case MENUOP_GETSLIDERLABEL:
 		sprintf(data->slider.label, "%.1f", (f32)data->slider.value / 10.f);
 		break;
-	case MENUOP_CHECKDISABLED:
-		return menuGyroDisabled();
 	}
 
 	return 0;

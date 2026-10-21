@@ -96,6 +96,11 @@ static f32 mouseSensY = 2.5f;
 #define INPUT_HAVE_GYRO 1 // SDL sensor API was added in 2.0.14
 #endif
 
+#ifdef PLATFORM_NSWITCH
+#define INPUT_HAVE_NXGYRO 1 // SDL's Switch backend doesn't report a gyro, so libnx is read directly
+#include "gyro_nswitch.h"
+#endif
+
 enum gyromode {
 	GYRO_MODE_OFF = 0,
 	GYRO_MODE_ALWAYS = 1,
@@ -109,7 +114,8 @@ enum gyromode {
 
 #define GYRO_RAD_TO_DEG 57.2957795f
 #define GYRO_UNITS_PER_DEG 0.15f // converts degrees turned per frame into mouselook units; tune to taste
-#define GYRO_BIAS_THRESHOLD 3.f // deg/s; below this on all axes the pad is considered stationary
+#define GYRO_MAX_DELTA 1.f // per frame safety limit in mouselook units
+#define GYRO_BIAS_THRESHOLD 3.f // deg/s; below this on both axes the pad is considered stationary
 #define GYRO_BIAS_RATE 0.02f // how fast the drift estimate follows the stationary readings
 #define GYRO_MAX_DT 0.1f // seconds; ignore longer hitches
 
@@ -123,10 +129,15 @@ static f32 gyroSensY = 1.f;
 static f32 gyroDeadzone = 0.3f; // deg/s
 static f32 gyroDX = 0.f; // this frame's gyro delta in mouselook units
 static f32 gyroDY = 0.f;
-#ifdef INPUT_HAVE_GYRO
-static f32 gyroBias[3];
+static f32 gyroBias[2]; // pitch, yaw drift estimate in deg/s
 static u64 gyroLastTime = 0;
+#ifdef INPUT_HAVE_GYRO
 static s32 gyroEnabledOnPad = 0;
+#endif
+#ifdef INPUT_HAVE_NXGYRO
+static s32 gyroNxTried = 0;
+static s32 gyroNxReady = 0;
+static f32 gyroNxUnit = 360.f; // degrees per second per libnx angular velocity unit
 #endif
 
 static s32 lastKey = 0;
@@ -377,12 +388,12 @@ static inline void inputInitController(const s32 cidx, const s32 jidx)
 #ifdef INPUT_HAVE_GYRO
 	if (cidx == 0) {
 		gyroEnabledOnPad = 0;
-		gyroBias[0] = gyroBias[1] = gyroBias[2] = 0.f;
+		gyroBias[0] = gyroBias[1] = 0.f;
 		if (SDL_GameControllerHasSensor(pads[cidx], SDL_SENSOR_GYRO) &&
 				SDL_GameControllerSetSensorEnabled(pads[cidx], SDL_SENSOR_GYRO, SDL_TRUE) == 0) {
 			gyroEnabledOnPad = 1;
 		}
-		sysLogPrintf(LOG_NOTE, "input: gyro %s on player 1's controller", gyroEnabledOnPad ? "available" : "not available");
+		sysLogPrintf(LOG_NOTE, "input: SDL gyro %s on player 1's controller", gyroEnabledOnPad ? "available" : "not available");
 	}
 #endif
 
@@ -974,54 +985,80 @@ static inline void inputUpdateMouse(void)
 	}
 }
 
+// reads the current pitch and yaw rates in deg/s, returns 1 if there was a sample
+static inline s32 inputReadGyro(f32 *pitch, f32 *yaw)
+{
+#ifdef INPUT_HAVE_GYRO
+	if (gyroEnabledOnPad && pads[0]) {
+		f32 g[3];
+		if (SDL_GameControllerGetSensorData(pads[0], SDL_SENSOR_GYRO, g, 3) != 0) {
+			return 0;
+		}
+		*pitch = g[GYRO_AXIS_PITCH] * GYRO_RAD_TO_DEG;
+		*yaw = g[GYRO_AXIS_YAW] * GYRO_RAD_TO_DEG;
+		return 1;
+	}
+#endif
+#ifdef INPUT_HAVE_NXGYRO
+	if (gyroNxReady) {
+		f32 p, y, r;
+		if (nxGyroRead(&p, &y, &r)) {
+			*pitch = p * gyroNxUnit;
+			*yaw = y * gyroNxUnit; // yaw is already measured around gravity, never around the roll axis
+			return 1;
+		}
+	}
+#endif
+	return 0;
+}
+
 static inline void inputUpdateGyro(void)
 {
 	gyroDX = 0.f;
 	gyroDY = 0.f;
 
-#ifdef INPUT_HAVE_GYRO
+#ifdef INPUT_HAVE_NXGYRO
+	if (!gyroNxTried) {
+		gyroNxTried = 1;
+		gyroNxReady = nxGyroInit();
+		sysLogPrintf(LOG_NOTE, "input: libnx gyro %s", gyroNxReady ? "started" : "failed to start");
+	}
+#endif
+
 	const u64 now = sysGetMicroseconds();
-	f32 dt = gyroLastTime ? (f32)(now - gyroLastTime) / 1000000.f : 0.f;
+	const f32 dt = gyroLastTime ? (f32)(now - gyroLastTime) / 1000000.f : 0.f;
 	gyroLastTime = now;
 
-	if (gyroMode == GYRO_MODE_OFF || !gyroEnabledOnPad || !pads[0] || dt <= 0.f || dt > GYRO_MAX_DT) {
+	if (gyroMode == GYRO_MODE_OFF || dt <= 0.f || dt > GYRO_MAX_DT) {
 		return;
 	}
 
-	f32 g[3];
-	if (SDL_GameControllerGetSensorData(pads[0], SDL_SENSOR_GYRO, g, 3) != 0) {
+	f32 pitch, yaw;
+	if (!inputReadGyro(&pitch, &yaw)) {
 		return;
-	}
-
-	// SDL reports rad/s: x = pitch, y = yaw, z = roll
-	f32 rate[3];
-	for (s32 i = 0; i < 3; ++i) {
-		rate[i] = g[i] * GYRO_RAD_TO_DEG;
 	}
 
 	// track drift: while the pad is sitting still, slowly follow whatever it reports
-	if (fabsf(rate[0] - gyroBias[0]) < GYRO_BIAS_THRESHOLD &&
-			fabsf(rate[1] - gyroBias[1]) < GYRO_BIAS_THRESHOLD &&
-			fabsf(rate[2] - gyroBias[2]) < GYRO_BIAS_THRESHOLD) {
-		for (s32 i = 0; i < 3; ++i) {
-			gyroBias[i] += (rate[i] - gyroBias[i]) * GYRO_BIAS_RATE;
-		}
+	if (fabsf(pitch - gyroBias[0]) < GYRO_BIAS_THRESHOLD && fabsf(yaw - gyroBias[1]) < GYRO_BIAS_THRESHOLD) {
+		gyroBias[0] += (pitch - gyroBias[0]) * GYRO_BIAS_RATE;
+		gyroBias[1] += (yaw - gyroBias[1]) * GYRO_BIAS_RATE;
 	}
 
 	if (gyroMode == GYRO_MODE_AIM && !inputButtonPressed(0, CONT_R)) {
 		return;
 	}
 
-	f32 yaw = rate[GYRO_AXIS_YAW] - gyroBias[GYRO_AXIS_YAW];
-	f32 pitch = rate[GYRO_AXIS_PITCH] - gyroBias[GYRO_AXIS_PITCH];
+	pitch -= gyroBias[0];
+	yaw -= gyroBias[1];
 	if (fabsf(yaw) < gyroDeadzone) yaw = 0.f;
 	if (fabsf(pitch) < gyroDeadzone) pitch = 0.f;
 
 	// positive mouse dx turns right and positive dy looks down; positive gyro yaw is a turn to the left
 	// and positive gyro pitch is looking up, so both get negated. flip with negative GyroSpeedX/Y if it feels wrong.
-	gyroDX = -yaw * dt * GYRO_UNITS_PER_DEG * gyroSensX;
-	gyroDY = -pitch * dt * GYRO_UNITS_PER_DEG * gyroSensY;
-#endif
+	f32 dx = -yaw * dt * GYRO_UNITS_PER_DEG * gyroSensX;
+	f32 dy = -pitch * dt * GYRO_UNITS_PER_DEG * gyroSensY;
+	gyroDX = (dx < -GYRO_MAX_DELTA) ? -GYRO_MAX_DELTA : (dx > GYRO_MAX_DELTA) ? GYRO_MAX_DELTA : dx;
+	gyroDY = (dy < -GYRO_MAX_DELTA) ? -GYRO_MAX_DELTA : (dy > GYRO_MAX_DELTA) ? GYRO_MAX_DELTA : dy;
 }
 
 void inputUpdate(void)
@@ -1400,11 +1437,14 @@ void inputMouseSetSpeed(f32 x, f32 y)
 
 s32 inputGyroSupported(void)
 {
+	s32 supported = 0;
 #ifdef INPUT_HAVE_GYRO
-	return gyroEnabledOnPad;
-#else
-	return 0;
+	supported |= gyroEnabledOnPad;
 #endif
+#ifdef INPUT_HAVE_NXGYRO
+	supported |= gyroNxReady;
+#endif
+	return supported;
 }
 
 s32 inputGyroGetMode(void)
@@ -1675,6 +1715,9 @@ PD_CONSTRUCTOR static void inputConfigInit(void)
 	configRegisterFloat("Input.GyroSpeedX", &gyroSensX, -30.f, 30.f);
 	configRegisterFloat("Input.GyroSpeedY", &gyroSensY, -30.f, 30.f);
 	configRegisterFloat("Input.GyroDeadzone", &gyroDeadzone, 0.f, 20.f);
+#ifdef INPUT_HAVE_NXGYRO
+	configRegisterFloat("Input.GyroNxUnit", &gyroNxUnit, 0.01f, 100000.f);
+#endif
 	configRegisterInt("Input.FakeGamepads", &fakeControllers, 0, 4);
 	configRegisterInt("Input.FirstGamepadNum", &firstController, 0, 3);
 	configRegisterInt("Input.UseHIDAPI", &useHIDAPI, 0, 1);
