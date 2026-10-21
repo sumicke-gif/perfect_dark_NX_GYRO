@@ -4551,7 +4551,7 @@ Gfx *menuitemControllerRender(Gfx *gdl, struct menurendercontext *context)
 #endif
 		gdl = text0f153628(gdl);
 		gdl = textRenderProjected(gdl, &x, &y,
-				"PC Port control scheme.\n"
+				PD_PLATFORM_NAME " Port control scheme.\n"
 				"Only change to another control scheme\n"
 				"if you want to use original N64 controls.\n\n"
 				"See Extended Key Bindings for more info.",
